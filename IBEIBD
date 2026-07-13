@@ -1,0 +1,144 @@
+IBD/IBE Mantel Test and Correlation Scatter Plot Analysis Code
+# Load required analytical and visualization packages
+library(tidyverse)
+library(vegan)
+library(patchwork)
+
+
+# Import raw environmental variables
+env_raw <- read.table("env.txt", header = TRUE)
+
+# Standardize environmental data (mean-centered and scaled)
+env_scaled <- scale(env_raw, center = TRUE, scale = TRUE)
+
+# Calculate pairwise Euclidean environmental distance matrix
+env_distance <- vegdist(
+  env_scaled,
+  method = "euclidean",
+  binary = FALSE,
+  diag = FALSE,
+  upper = FALSE,
+  na.rm = FALSE
+)
+
+# Export standardized environmental distance matrix
+write.csv(as.matrix(env_distance), file = "env_distance_scaled.csv", quote = FALSE, row.names = TRUE)
+
+
+# Pairwise population genetic differentiation matrix (FST values)
+genetic_diff <- read.table("rda3.fst.nozero.txt", header = TRUE, row.names = 1)
+
+# Pairwise geographical distance matrix
+geo_distance <- read.table("geo.txt", header = TRUE, row.names = 1)
+
+# Standardized pairwise environmental distance matrix
+env_dist_matrix <- read.csv("env_distance_scaled.csv", header = TRUE, row.names = 1)
+
+
+# Set random seed for reproducibility
+set.seed(123)
+
+# IBE test: Genetic differentiation ~ Environmental distance
+mantel_gene_env <- mantel(genetic_diff, env_dist_matrix, method = "pearson")
+
+# IBD test: Genetic differentiation ~ Geographical distance
+mantel_gene_geo <- mantel(genetic_diff, geo_distance, method = "pearson")
+
+# Environment-Geography correlation test
+mantel_env_geo <- mantel(env_dist_matrix, geo_distance, method = "pearson")
+
+# Print Mantel test results
+cat("=== Mantel Test Results ===\n")
+cat("Genetic vs Environmental Distance:\n"); print(mantel_gene_env)
+cat("\nGenetic vs Geographical Distance:\n"); print(mantel_gene_geo)
+cat("\nEnvironmental vs Geographical Distance:\n"); print(mantel_env_geo)
+
+
+# Geographical distance vs environmental distance data
+plot_env_geo <- read.table("env_geo.txt", header = TRUE)
+
+# Environmental distance vs genetic differentiation data
+plot_gene_env <- read.table("gene_env.txt", header = TRUE)
+
+# Geographical distance vs genetic differentiation data
+plot_gene_geo <- read.table("gene_geo.txt", header = TRUE)
+
+# Integrated IBD and IBE dataset for comparative analysis
+plot_ibd <- read.table("IBD_all_rda3.txt", header = TRUE)
+plot_ibe <- read.table("IBE_all_rda3.txt", header = TRUE)
+
+
+plot_theme <- theme_bw() +
+  theme(
+ panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "transparent", colour = "black")
+  )
+
+# Define consistent color palette
+color_light <- "#4792C4"
+color_fill_light <- "#91C5DA"
+color_dark <- "#D46153"
+color_fill_dark <- "#FDDBC4"
+line_light <- "#2464AB"
+line_dark <- "#B1182D"
+
+
+# Plot 1: Geographical distance ~ Environmental distance
+p1 <- ggplot(plot_env_geo, aes(x = distance, y = env)) +
+  geom_point(size = 3, alpha = 0.3, shape = 21, color = color_light, fill = color_fill_light) +
+  geom_smooth(method = "lm", alpha = 0.2, colour = line_light, size = 1.5) +
+  labs(x = "Geographical Distance (100km)", y = "Environmental Distance") +
+  scale_x_continuous(limits = c(0, 10)) +
+  scale_y_continuous(limits = c(0, 12)) +
+  plot_theme
+
+# Plot 2: Environmental distance ~ Genetic differentiation (FST)
+p2 <- ggplot(plot_gene_env, aes(x = env, y = Fst)) +
+  geom_point(size = 3, alpha = 0.3, shape = 21, color = color_light, fill = color_fill_light) +
+  geom_smooth(method = "lm", alpha = 0.2, colour = line_light, size = 1.5) +
+  labs(x = "Environmental Distance", y = expression(italic(F)[italic(ST)]/(1-italic(F)[italic(ST)]))) +
+  scale_y_continuous(limits = c(-0.1, 0.2)) +
+  plot_theme
+
+# Plot 3: Geographical distance ~ Genetic differentiation (FST)
+p3 <- ggplot(plot_gene_geo, aes(x = distance, y = Fst)) +
+  geom_point(size = 3, alpha = 0.3, shape = 21, color = color_dark, fill = color_fill_dark) +
+ geom_smooth(method = "lm", alpha = 0.2, colour = line_dark, size = 1.5) +
+  labs(x = "Geographical Distance (100km)", y = expression(italic(F)[italic(ST)]/(1-italic(F)[italic(ST)]))) +
+  scale_y_continuous(limits = c(0, 0.2)) +
+  plot_theme
+
+
+# Comparative IBD plot (ALL vs RDA datasets)
+plot_ibd_compare <- ggplot(plot_ibd, aes(x = distance, y = Fst)) +
+  geom_point(size = 3, alpha = 0.3, shape = 21, aes(color = cyl, fill = cyl)) +
+  geom_smooth(method = "lm", alpha = 0.2, aes(colour = cyl), size = 1.5) +
+  labs(x = "Geographical Distance (100km)", y = expression(italic(F)[italic(ST)]/(1-italic(F)[italic(ST)]))) +
+  scale_y_continuous(limits = c(0, 0.6)) +
+  scale_color_manual(values = c(ALL = color_light, RDA = color_dark, ALL_fit = line_light, RDA_fit = line_dark)) +
+  scale_fill_manual(values = c(ALL = color_fill_light, RDA = color_fill_dark)) +
+  plot_theme
+
+# Comparative IBE plot (ALL vs RDA datasets)
+plot_ibe_compare <- ggplot(plot_ibe, aes(x = env, y = Fst)) +
+  geom_point(size = 3, alpha = 0.3, shape = 21, aes(color = cyl, fill = cyl)) +
+  geom_smooth(method = "lm", alpha = 0.2, aes(colour = cyl), size = 1.5) +
+  labs(x = "Environmental Distance", y = expression(italic(F)[italic(ST)]/(1-italic(F)[italic(ST)]))) +
+  scale_y_continuous(limits = c(-0.05, 0.6)) +
+  scale_color_manual(values = c(ALL = color_light, RDA = color_dark, ALL_fit = line_light, RDA_fit = line_dark)) +
+  scale_fill_manual(values = c(ALL = color_fill_light, RDA = color_fill_dark)) +
+  plot_theme
+
+
+# Assemble multi-panel figure
+combined_plot <- (p1 + p2 + p3) / (plot_ibd_compare + plot_ibe_compare) +
+  plot_annotation(tag_levels = "A")
+
+# Export high-resolution combined figure
+ggsave("IBD_IBE_Correlation_Analysis.pdf", plot = combined_plot, width = 12, height = 8, dpi = 300)
+
+# Export individual plots for separate use
+ggsave("Geo_Env_Distance.pdf", plot = p1, width = 6, height = 5, dpi = 300)
+ggsave("Env_Genetic_Correlation.pdf", plot = p2, width = 6, height = 5, dpi = 300)
+ggsave("Geo_Genetic_Correlation.pdf", plot = p3, width = 6, height = 5, dpi = 300)
