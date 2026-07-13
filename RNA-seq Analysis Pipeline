@@ -1,0 +1,102 @@
+Standard RNA-seq Analysis Pipeline (Quality Control, Genome Indexing, Mapping and Quantification)
+# This is a standardized universal RNA-seq analytical pipeline
+# All private server paths are removed for public availability
+# Pipeline workflow: Quality control - Genome index construction - Reads mapping - Gene quantification - Result collation
+
+1. Raw Reads Quality Trimming and Filtering
+# Create directory for clean sequencing data
+mkdir -p 00.clean.data
+
+# Fastp quality control for sample 1 (paired-end reads)
+nohup fastp \
+-i sample1_R1.fq.gz \
+-I sample1_R2.fq.gz \
+-o 00.clean.data/sample1_clean_R1.fastq.gz \
+-O 00.clean.data/sample1_clean_R2.fastq.gz \
+-h fastp_sample1_report.html 
+
+# Fastp quality control for sample 2 (paired-end reads)
+nohup fastp \
+-i sample2_R1.fq.gz \
+-I sample2_R2.fq.gz \
+-o 00.clean.data/sample2_clean_R1.fastq.gz \
+-O 00.clean.data/sample2_clean_R2.fastq.gz \
+-h fastp_sample2_report.html 
+
+2. Reference Genome Index Construction
+# Create directory for reference genome files
+mkdir -p 01.genome.index
+
+# Convert GFF annotation file to standard GTF format
+gffread reference.gff -T -o reference_renamed.gtf
+
+# Extract exon and splice site information for Hisat2 splicing-aware mapping
+python extract_exons.py reference_renamed.gtf > exons.txt
+python extract_splice_sites.py reference_renamed.gtf > splicesites.txt
+
+# Build splicing-aware reference genome index (multi-threaded)
+hisat2-build -f reference.fa \
+--ss splicesites.txt \
+--exon exons.txt \
+-p 7 \
+01.genome.index/genome_index
+
+3. Clean Reads Mapping to Reference Genome
+# Create directory for mapping results
+mkdir -p 02.mapping.results
+
+# Hisat2 paired-end mapping and BAM sorting (sample 1)
+hisat2 -p 20 --dta \
+-x 01.genome.index/genome_index \
+--summary-file 02.mapping.results/sample1_mapping_summary.txt \
+-1 00.clean.data/sample1_clean_R1.fastq.gz \
+-2 00.clean.data/sample1_clean_R2.fastq.gz \
+| samtools sort -@ 10 -o 02.mapping.results/sample1_sorted.bam
+
+# Hisat2 paired-end mapping and BAM sorting (sample 2)
+hisat2 -p 20 --dta \
+-x 01.genome.index/genome_index \
+--summary-file 02.mapping.results/sample2_mapping_summary.txt \
+-1 00.clean.data/sample2_clean_R1.fastq.gz \
+-2 00.clean.data/sample2_clean_R2.fastq.gz \
+| samtools sort -@ 10 -o 02.mapping.results/sample2_sorted.bam
+
+# Hisat2 paired-end mapping and BAM sorting (sample 3)
+hisat2 -p 20 --dta \
+-x 01.genome.index/genome_index \
+--summary-file 02.mapping.results/sample3_mapping_summary.txt \
+-1 00.clean.data/sample3_clean_R1.fastq.gz \
+-2 00.clean.data/sample3_clean_R2.fastq.gz \
+| samtools sort -@ 10 -o 02.mapping.results/sample3_sorted.bam
+
+4. Transcript and Gene Quantification Using StringTie
+# Create directory for gene quantification results
+mkdir -p 03.quantification.results
+
+# Quantification for sample 1
+stringtie -p 30 -e \
+-G reference_renamed.gtf \
+-o 03.quantification.results/sample1_transcript.gtf \
+-A 03.quantification.results/sample1_gene_abundance.tsv \
+02.mapping.results/sample1_sorted.bam
+
+# Quantification for sample 2
+stringtie -p 30 -e \
+-G reference_renamed.gtf \
+-o 03.quantification.results/sample2_transcript.gtf \
+-A 03.quantification.results/sample2_gene_abundance.tsv \
+02.mapping.results/sample2_sorted.bam
+
+# Quantification for sample 3
+stringtie -p 30 -e \
+-G reference_renamed.gtf \
+-o 03.quantification.results/sample3_transcript.gtf \
+-A 03.quantification.results/sample3_gene_abundance.tsv \
+02.mapping.results/sample3_sorted.bam
+
+5. Expression Matrix Consolidation
+# Create final result directory
+mkdir -p 04.final.results
+
+# Generate unified gene expression matrix from multiple samples
+python prepDE.python2.py -i sample_list.txt
