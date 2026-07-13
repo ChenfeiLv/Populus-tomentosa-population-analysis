@@ -1,0 +1,8 @@
+library('ggbiplot')
+data <- read.table('all.txt')
+res.pca <- prcomp(data, scale = T)
+summary(res.pca)
+p <- ggbiplot(res.pca, obs.scale = 1, var.scale = 1, ellipse = TRUE, circle = TRUE)+ theme_bw()
+ggsave(p,file="all.pca.pdf",width=10, height=4)
+write.table(res.pca$rotation,'na.0.rotation.txt')
+write.table(res.pca$x,'na.0.x.txt')
