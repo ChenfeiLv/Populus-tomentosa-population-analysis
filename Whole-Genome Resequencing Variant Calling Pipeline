@@ -1,0 +1,148 @@
+
+00. Reference Genome Index Construction
+# Build multi-format reference genome indexes for BWA, SAMtools and GATK
+bwa index ref.fa
+samtools faidx ref.fa
+gatk CreateSequenceDictionary -R ref.fa -O ref.dict
+01. Raw Sequence File Renaming
+# Standardize paired-end fastq file naming for batch processing
+mv 12_60_R1.fq.gz 12_60.R1.fq.gz
+# Batch renaming can be implemented via Excel or shell loops for bulk samples
+02. Paired-End Reads Mapping and BAM Sorting
+# Generate batch mapping script for standard paired-end clean reads
+# Apply mapping quality filtering (-q 20) to retain high-quality mapped reads
+ls *.R1.fq.gz | sort -V | xargs -n2 | while read r1 r2
+do
+  sample_name=${r1%.R1.fq.gz}
+  echo "bwa mem -t 30 -R '@RG\tID:sample\tPL:illumina\tSM:${sample_name}' ref.fa ${r1} ${r2} \
+| samtools view -bS -q 20 \
+| samtools sort -@ 15 -o ${sample_name}.sorted.bam"
+  echo "samtools flagstat ${sample_name}.sorted.bam > ${sample_name}.mapping.stat.txt"
+done > batch_mapping.sh
+03. PCR Duplicate Marking and BAM Indexing
+# Batch mark PCR duplicates for sorted BAM files using GATK
+for bam in `ls *.sorted.bam`
+do
+  sample_name=${bam%.sorted.bam}
+  echo "gatk MarkDuplicates \
+-I ${sample_name}.sorted.bam \
+-O ${sample_name}.sorted.markdup.bam \
+-M ${sample_name}.dup_metrics.txt"
+  echo "samtools index ${sample_name}.sorted.markdup.bam"
+done > batch_markduplicates.sh
+04. Per-Sample GVCF Generation (HaplotypeCaller)
+# Generate GVCF files for individual samples for population joint genotyping
+# Support multi-threaded single-chromosome parallel computing
+for bam in `ls *.sorted.markdup.bam`
+do
+  sample_name=${bam%.sorted.markdup.bam}
+  echo "gatk --java-options \"-Xmx40g -XX:ParallelGCThreads=4\" \
+HaplotypeCaller \
+-I ${bam} \
+-R ref.fa \
+--emit-ref-confidence GVCF \
+-O ${sample_name}.g.vcf.gz"
+done > batch_gvcf_calling.sh
+
+# Optional: Python-based parallel single-chromosome GVCF calling
+# python gatk4.py --process 8 --input sample.markdup.bam --ref ref.fa --output sample
+# tabix -p vcf sample.g.vcf.gz
+05. Population-Wide GVCF Merging
+# Merge all individual sample GVCF files for joint genotyping
+# Support single-chromosome parallel merging to reduce memory consumption
+gatk CombineGVCFs -R ref.fa \
+-V ./sample1.g.vcf.gz \
+-V ./sample2.g.vcf.gz \
+-V ./sample3.g.vcf.gz \
+-O population_merged.g.vcf.gz
+
+# Optional: Multi-process chromosome-wise merging
+# python combine.py --process 15 --ref ref.fa --output merged_population
+06. Joint Genotyping for Variant Discovery
+# Perform joint genotyping on merged population GVCF file
+gatk GenotypeGVCFs \
+-R ref.fa \
+-V population_merged.g.vcf.gz \
+-O population_raw.vcf.gz
+
+# Optional: Parallel single-chromosome genotyping
+# nohup python gatk4.GenotypeGVCFs.py --process 15 --input chr_merged.g.vcf.gz --ref ref.fa --output chr_genotyped > genotyping.log 2>&1 
+07. Separate SNP and INDEL Variants
+# Extract SNP and INDEL variants independently for targeted filtering
+gatk SelectVariants \
+-V population_raw.vcf.gz \
+-O population_raw.snp.vcf.gz \
+--select-type-to-include SNP
+
+gatk SelectVariants \
+-V population_raw.vcf.gz \
+-O population_raw.indel.vcf.gz \
+--select-type-to-include INDEL
+08. GATK Standard Hard Filtering
+# Hard filtering for SNP variants (standard population genomics thresholds)
+gatk VariantFiltration \
+-V population_raw.snp.vcf.gz \
+--filter-expression "QD < 2.0 || QUAL < 30.0 || SOR > 3.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \
+--filter-name "SNP_HARD_FILTER" \
+--genotype-filter-expression "DP < 5 || DP > 100" \
+--genotype-filter-name "DP_ABNORMAL" \
+-O population_filtered.snp.flag.vcf.gz
+
+# Hard filtering for INDEL variants (standard thresholds)
+gatk VariantFiltration \
+-V population_raw.indel.vcf.gz \
+--filter-expression "QD < 2.0 || FS > 200.0 || SOR > 10.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \
+--filter-name "INDEL_HARD_FILTER" \
+-O population_filtered.indel.flag.vcf.gz
+09. Remove Filtered Low-Quality Variants
+# Retain only high-quality pass variants and restrict to biallelic sites
+gatk SelectVariants \
+--exclude-filtered true \
+--restrict-alleles-to BIALLELIC \
+-R ref.fa \
+-V population_filtered.snp.flag.vcf.gz \
+-O population_highquality.snp.vcf.gz
+
+gatk SelectVariants \
+--exclude-filtered true \
+--restrict-alleles-to BIALLELIC \
+-R ref.fa \
+-V population_filtered.indel.flag.vcf.gz \
+-O population_highquality.indel.vcf.gz
+10. Population-Level VCF Filtering (VCFtools)
+# Filter variants by missing rate, minor allele frequency and depth
+# SNP filtering: max missing 20%, MAF ≥ 0.05, high confidence sites
+vcftools \
+--vcf population_highquality.snp.vcf.gz \
+--max-missing 0.8 \
+--maf 0.05 \
+--minQ 30 \
+--minDP 5 \
+--min-alleles 2 \
+--max-alleles 2 \
+--recode --recode-INFO-all \
+--out population_final.snp
+
+# INDEL filtering: max missing 20%, MAF ≥ 0.05
+vcftools \
+--vcf population_highquality.indel.vcf.gz \
+--max-missing 0.8 \
+--maf 0.05 \
+--minQ 30 \
+--minDP 1 \
+--min-alleles 2 \
+--max-alleles 2 \
+--recode --recode-INFO-all \
+--out population_final.indel
+11. VCF Sorting and Compression
+# Standard chromosome and coordinate sorting using bcftools
+bcftools sort population_final.snp.recode.vcf -o population_final.snp.sorted.vcf
+bcftools sort population_final.indel.recode.vcf -o population_final.indel.sorted.vcf
+
+# Compress final sorted VCF files
+bgzip population_final.snp.sorted.vcf
+bgzip population_final.indel.sorted.vcf
+12. Simplify VCF Format (Optional)
+# Extract core variant information and remove redundant annotations
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%FILTER\t.\tGT[\t%GT]\n' \
+population_final.snp.sorted.vcf.gz > population_snp_simplified.txt
