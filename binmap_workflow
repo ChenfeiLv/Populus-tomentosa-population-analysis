@@ -1,0 +1,165 @@
+#! /usr/bin/env Rscript
+library('onemap')
+library('vcfR')
+vcffile <- read.vcfR('cross.snp.miss0.8.maf0.05.recode.vcf')
+vcf_example_out <- onemap_read_vcfR(vcfR.object = vcffile, parent1 = "1", parent2 = "2", cross = "outcross")
+segreg_test <- test_segregation(vcf_example_out)
+options(max.print=10000000000)
+sink("cross1.all.txt")
+print(segreg_test)
+sink()
+bins <- find_bins(vcf_example_out, exact = FALSE)
+bins_example <- create_data_bins(vcf_example_out, bins)
+segreg_test_bins <- test_segregation(bins_example)
+sink("cross1.bins.txt")
+print(segreg_test_bins)
+sink()
+no_dist_all <- select_segreg(segreg_test, distorted = FALSE, numbers = TRUE)
+dist_all <- select_segreg(segreg_test, distorted = TRUE, numbers = TRUE)
+no_dist_bins <- select_segreg(segreg_test_bins, distorted = FALSE, numbers = TRUE)
+dist_bins <- select_segreg(segreg_test_bins, distorted = TRUE, numbers = TRUE)
+write.table(no_dist_all,file="no_dist_all_q0.05",quote = TRUE)
+write.table(dist_all,file="dist_all_q0.05",quote = TRUE)
+write.table(no_dist_bins,file="no_dist_bins_q0.05",quote = TRUE)
+write.table(dist_bins,file="dist_bins_q0.05",quote = TRUE)
+
+#
+# vcf2hmp.py
+# python vcf2hmp.py [input vcf file] [output hmp file]####
+# python2.7 vcf2hmp.py [input vcf file] [output hmp file]
+
+import sys
+import datetime
+
+def main() :
+	print ("**********************************************************************")
+	print (datetime.datetime.now(),)
+	print ("start.")
+	
+	#read command line argument
+	in_fn=sys.argv[1]
+	out_fn=sys.argv[2]
+
+	print (datetime.datetime.now(),)
+	print ("Input File Name   : "+in_fn)
+	print (datetime.datetime.now(),)
+	print ("Output File Name  : "+out_fn)
+
+
+	#set initial argunemt
+	header=["rs","allele","chrom","pos","strand","assembly","center","protLSID","assayLSID","panel","QCcode"]
+
+	#open input&output file
+	_in=open(in_fn, 'r')
+	_out=open(out_fn, 'w')
+	sample_list=[]
+	#pass header
+	while True :
+		in_line=_in.readline()
+		if in_line[0:2]=="##" :
+			pass
+		if in_line[0:2]=="#C":
+			sample_list=in_line.rstrip().split("\t")[9:]
+			print (sample_list)
+			print ("**********************************************************************")
+			break	
+	#make&write hmp header
+	in_line=in_line.strip().split("\t")
+	sample_num=len(in_line)-9
+
+	#select 1 of 2
+
+	#selection 1
+	#in_line=in_line[9:]
+	#end 1
+
+	#selection 2
+	in_line=[]
+	for i in range(0, sample_num) :
+		in_line.extend([sample_list[i]])
+	#end 2
+	
+	header.extend(in_line)
+
+	out_line="\t".join(header)+"\n"
+	_out.write(out_line)
+
+	while True :
+		#read line
+		in_line=_in.readline()
+		
+		if in_line=='' :
+			break
+		
+		in_line=in_line.strip().split("\t")
+
+		#multiple?
+		if in_line[4].find(',')!=-1 :
+			continue
+
+		#insertion
+		if len(in_line[3]) < len(in_line[4]) :
+			position=int(in_line[1])+1
+			ref='I'
+			alt=in_line[4][len(in_line[3])]
+		
+		
+		#deletion
+		elif len(in_line[3]) > len(in_line[4]) :
+			position=int(in_line[1])
+			ref=in_line[3][len(in_line[4])]
+			alt='I'
+
+		#SNP
+		else :
+			position=int(in_line[1])
+			ref=in_line[3]
+			alt=in_line[4]
+
+		out_line=[]
+		out_line.extend([in_line[0].lower()+'_'+str(position)])	#rs
+		out_line.extend([ref+'/'+alt])							#allele
+		out_line.extend([in_line[0]])							#chromosome number
+		out_line.extend([str(position)])						#position
+		out_line.extend(["NA"])									#strand
+		out_line.extend(["NA"])                                 #assembly
+		out_line.extend(["NA"])                                 #center
+		out_line.extend(["NA"])                                 #protLSID
+		out_line.extend(["NA"])                                 #assayLSID
+		out_line.extend(["NA"])                                 #panel
+		out_line.extend(["NA"])                                 #QCcode
+
+		for i in range(0,sample_num) :
+			buf=in_line[9+i].strip().split(":")[0]
+			buf=buf.strip().split("/")
+			
+			if buf[0]=='.' and buf[1]=='.' :
+				gt="NN"
+
+			else :
+				if buf[0]=='0' :
+					gt=ref
+				elif buf[0]=='1' :
+					gt=alt
+				else :
+					gt='?'
+				
+				if buf[1]=='0' :
+					gt=gt+ref
+				elif buf[1]=='1' :
+					gt=gt+alt
+				else :
+					gt=gt+'?'
+
+			out_line.extend([gt])
+
+		out_line="\t".join(out_line)+"\n"
+		_out.write(out_line)
+	
+	_out.close()
+	print (datetime.datetime.now(),)
+	print ("End.")
+	return
+
+if __name__=='__main__' :
+	main()
